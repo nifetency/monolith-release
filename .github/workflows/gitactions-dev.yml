@@ -74,7 +74,6 @@ jobs:
 
       - name: Commit and push changes
         working-directory: nife-io
-
         run: |
 
           git config user.name "github-actions[bot]"
