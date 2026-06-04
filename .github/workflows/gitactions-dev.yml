@@ -6,15 +6,11 @@ on:
 
 jobs:
   update-nife-io:
-
     runs-on: ubuntu-latest
-
     steps:
-
       - name: Get release info
         id: release
         run: |
-
           VERSION="${{ github.event.release.tag_name }}"
           VERSION_CLEAN="${VERSION#v}"
           RELEASE_DATE=$(date -u +"%Y-%m-%d")
@@ -23,28 +19,22 @@ jobs:
           echo "version_clean=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
           echo "release_date=${RELEASE_DATE}" >> $GITHUB_OUTPUT
 
-
       - name: Checkout nife.io
         uses: actions/checkout@v4
-
         with:
           repository: nifetency/nife.io
           ref: develop
           token: ${{ secrets.RELEASE_PAT }}
           path: nife-io
 
-
       - name: Update metadata and latest pointers
         run: |
-
           VERSION="${{ steps.release.outputs.version }}"
           VERSION_CLEAN="${{ steps.release.outputs.version_clean }}"
           RELEASE_DATE="${{ steps.release.outputs.release_date }}"
 
           BASE_URL="https://github.com/nifetency/monolith-release/releases/download/${VERSION}"
-
           TARGET="nife-io/release/monolith"
-
 
           cat > "$TARGET/metadata.json" <<EOF
           {
@@ -57,32 +47,29 @@ jobs:
           }
           EOF
 
+          # Linux
+          echo "${BASE_URL}/app-linux-x86_64.tar.gz" > "$TARGET/linux/x64/latest"
+          echo "${BASE_URL}/app-linux-x86_64.tar.gz" > "$TARGET/linux/x86_64/latest"
 
-          echo "${BASE_URL}/app-linux.tar.gz" \
-            > "$TARGET/linux/x64/latest"
+          # Windows
+          echo "${BASE_URL}/app-windows-x86_64.zip" > "$TARGET/windows/x64/latest"
+          echo "${BASE_URL}/app-windows-x86_64.zip" > "$TARGET/windows/x86_64/latest"
 
-          echo "${BASE_URL}/app-windows.zip" \
-            > "$TARGET/windows/x64/latest"
-
-          echo "${BASE_URL}/app-darwin.tar.gz" \
-            > "$TARGET/darwin/x64/latest"
-
+          # Darwin
+          echo "${BASE_URL}/app-darwin-x86_64.tar.gz" > "$TARGET/darwin/x64/latest"
+          echo "${BASE_URL}/app-darwin-x86_64.tar.gz" > "$TARGET/darwin/x86_64/latest"
+          echo "${BASE_URL}/app-darwin-arm64.tar.gz" > "$TARGET/darwin/arm64/latest"
 
           echo "Updated files:"
           find "$TARGET" -type f | sort
 
-
       - name: Commit and push changes
         working-directory: nife-io
         run: |
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add release/monolith/
 
-          git commit -m \
-            "chore: update monolith release pointers to ${{ steps.release.outputs.version }}" \
-            || echo "No changes"
-
+          git commit -m "chore: update monolith release pointers to ${{ steps.release.outputs.version }}" || echo "No changes"
           git push
