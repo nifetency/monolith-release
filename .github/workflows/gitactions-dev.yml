@@ -14,10 +14,46 @@ jobs:
           VERSION="${{ github.event.release.tag_name }}"
           VERSION_CLEAN="${VERSION#v}"
           RELEASE_DATE=$(date -u +"%Y-%m-%d")
-
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "version_clean=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
           echo "release_date=${RELEASE_DATE}" >> $GITHUB_OUTPUT
+
+      - name: Validate release artifacts exist
+        id: validate
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          REPO="nifetency/monolith-release"
+          
+          echo "Checking artifacts for release: $VERSION"
+          
+          # Array of expected artifacts
+          declare -a ARTIFACTS=(
+            "app-linux-x86_64.tar.gz"
+            "app-windows-x86_64.zip"
+            "app-darwin-x86_64.tar.gz"
+            "app-darwin-arm64.tar.gz"
+          )
+          
+          MISSING=()
+          for artifact in "${ARTIFACTS[@]}"; do
+            DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$artifact"
+            echo "Checking: $artifact"
+            
+            if curl -sL -I "$DOWNLOAD_URL" | grep -q "200 OK"; then
+              echo "✓ Found: $artifact"
+            else
+              echo "✗ Missing: $artifact"
+              MISSING+=("$artifact")
+            fi
+          done
+          
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "ERROR: Missing artifacts:"
+            printf '%s\n' "${MISSING[@]}"
+            exit 1
+          fi
+          
+          echo "validation_passed=true" >> $GITHUB_OUTPUT
 
       - name: Checkout nife.io
         uses: actions/checkout@v4
@@ -27,15 +63,27 @@ jobs:
           token: ${{ secrets.RELEASE_PAT }}
           path: nife-io
 
+      - name: Create directory structure
+        run: |
+          TARGET="nife-io/release/monolith"
+          
+          mkdir -p "$TARGET/linux/x64"
+          mkdir -p "$TARGET/linux/x86_64"
+          mkdir -p "$TARGET/windows/x64"
+          mkdir -p "$TARGET/windows/x86_64"
+          mkdir -p "$TARGET/darwin/x86_64"
+          mkdir -p "$TARGET/darwin/x64"
+          mkdir -p "$TARGET/darwin/arm64"
+
       - name: Update metadata and latest pointers
         run: |
           VERSION="${{ steps.release.outputs.version }}"
           VERSION_CLEAN="${{ steps.release.outputs.version_clean }}"
           RELEASE_DATE="${{ steps.release.outputs.release_date }}"
-
           BASE_URL="https://github.com/nifetency/monolith-release/releases/download/${VERSION}"
           TARGET="nife-io/release/monolith"
-
+          
+          # Create main metadata file
           cat > "$TARGET/metadata.json" <<EOF
           {
             "latest":"${VERSION_CLEAN}",
@@ -43,33 +91,109 @@ jobs:
             "tag":"${VERSION}",
             "release_date":"${RELEASE_DATE}",
             "release_url":"https://github.com/nifetency/monolith-release/releases/tag/${VERSION}",
-            "changelog":"https://github.com/nifetency/monolith-release/releases/tag/${VERSION}"
+            "changelog":"https://github.com/nifetency/monolith-release/releases/tag/${VERSION}",
+            "platforms": {
+              "linux": {
+                "x86_64": "app-linux-x86_64.tar.gz"
+              },
+              "windows": {
+                "x86_64": "app-windows-x86_64.zip"
+              },
+              "darwin": {
+                "x86_64": "app-darwin-x86_64.tar.gz",
+                "arm64": "app-darwin-arm64.tar.gz"
+              }
+            }
           }
           EOF
-
-          # Linux
+          
+          # Linux x86_64
           echo "${BASE_URL}/app-linux-x86_64.tar.gz" > "$TARGET/linux/x64/latest"
           echo "${BASE_URL}/app-linux-x86_64.tar.gz" > "$TARGET/linux/x86_64/latest"
-
-          # Windows
+          echo "app-linux-x86_64.tar.gz" > "$TARGET/linux/x64/filename"
+          echo "app-linux-x86_64.tar.gz" > "$TARGET/linux/x86_64/filename"
+          
+          # Windows x86_64
           echo "${BASE_URL}/app-windows-x86_64.zip" > "$TARGET/windows/x64/latest"
           echo "${BASE_URL}/app-windows-x86_64.zip" > "$TARGET/windows/x86_64/latest"
-
-          # Darwin
+          echo "app-windows-x86_64.zip" > "$TARGET/windows/x64/filename"
+          echo "app-windows-x86_64.zip" > "$TARGET/windows/x86_64/filename"
+          
+          # macOS x86_64 (Intel)
           echo "${BASE_URL}/app-darwin-x86_64.tar.gz" > "$TARGET/darwin/x64/latest"
           echo "${BASE_URL}/app-darwin-x86_64.tar.gz" > "$TARGET/darwin/x86_64/latest"
+          echo "app-darwin-x86_64.tar.gz" > "$TARGET/darwin/x64/filename"
+          echo "app-darwin-x86_64.tar.gz" > "$TARGET/darwin/x86_64/filename"
+          
+          # macOS arm64 (Apple Silicon)
           echo "${BASE_URL}/app-darwin-arm64.tar.gz" > "$TARGET/darwin/arm64/latest"
-
+          echo "app-darwin-arm64.tar.gz" > "$TARGET/darwin/arm64/filename"
+          
           echo "Updated files:"
           find "$TARGET" -type f | sort
+
+      - name: Validate metadata
+        run: |
+          TARGET="nife-io/release/monolith"
+          
+          echo "Validating metadata structure..."
+          
+          # Check that all required files exist
+          FILES=(
+            "$TARGET/metadata.json"
+            "$TARGET/linux/x86_64/latest"
+            "$TARGET/windows/x86_64/latest"
+            "$TARGET/darwin/x86_64/latest"
+            "$TARGET/darwin/arm64/latest"
+          )
+          
+          for file in "${FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✓ Found: $file"
+              echo "  Content: $(cat "$file")"
+            else
+              echo "✗ Missing: $file"
+              exit 1
+            fi
+          done
+          
+          # Validate JSON
+          if jq empty "$TARGET/metadata.json" 2>/dev/null; then
+            echo "✓ metadata.json is valid JSON"
+          else
+            echo "✗ metadata.json is invalid JSON"
+            exit 1
+          fi
 
       - name: Commit and push changes
         working-directory: nife-io
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git add release/monolith/
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update monolith release pointers to ${{ steps.release.outputs.version }}"
+            git push
+            echo "✓ Successfully pushed updates to nife.io"
+          fi
 
-          git commit -m "chore: update monolith release pointers to ${{ steps.release.outputs.version }}" || echo "No changes"
-          git push
+      - name: Summary
+        run: |
+          echo "## Release Metadata Update Complete"
+          echo ""
+          echo "**Version**: ${{ steps.release.outputs.version }}"
+          echo "**Release Date**: ${{ steps.release.outputs.release_date }}"
+          echo ""
+          echo "### Artifacts Registered"
+          echo "- Linux x86_64: app-linux-x86_64.tar.gz"
+          echo "- Windows x86_64: app-windows-x86_64.zip"
+          echo "- macOS x86_64 (Intel): app-darwin-x86_64.tar.gz"
+          echo "- macOS arm64 (Apple Silicon): app-darwin-arm64.tar.gz"
+          echo ""
+          echo "### Metadata Updated"
+          echo "- Repository: nifetency/nife.io"
+          echo "- Branch: develop"
+          echo "- Path: release/monolith/"
